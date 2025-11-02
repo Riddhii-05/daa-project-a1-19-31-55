@@ -1,0 +1,184 @@
+import re
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+
+
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'[^a-z\s]', '', text)
+    return text.split()
+
+
+def fuzzy_lcs(seq1, seq2):
+    synonyms = {
+        "developer": ["programmer", "coder"],
+        "data": ["dataset", "information"],
+        "machine": ["ml", "ai"],
+        "analysis": ["analytics", "analyst"],
+        "model": ["framework", "architecture"]
+    }
+    m, n = len(seq1), len(seq2)
+    dp = [[0]*(n+1) for _ in range(m+1)]
+
+    def match(x, y):
+        return x == y or y in synonyms.get(x, [])
+
+    for i in range(m):
+        for j in range(n):
+            if match(seq1[i], seq2[j]):
+                dp[i+1][j+1] = dp[i][j] + 1
+            else:
+                dp[i+1][j+1] = max(dp[i][j+1], dp[i+1][j])
+    return dp[m][n] / max(m, 1)
+
+
+def compute_lps(pattern):
+    lps = [0]*len(pattern)
+    j = 0
+    for i in range(1, len(pattern)):
+        while j > 0 and pattern[i] != pattern[j]:
+            j = lps[j-1]
+        if pattern[i] == pattern[j]:
+            j += 1
+        lps[i] = j
+    return lps
+
+def kmp_search(text, pattern):
+    if not pattern:
+        return 0
+    lps = compute_lps(pattern)
+    i = j = count = 0
+    while i < len(text):
+        if text[i] == pattern[j]:
+            i += 1
+            j += 1
+            if j == len(pattern):
+                count += 1
+                j = lps[j-1]
+        else:
+            j = lps[j-1] if j else 0
+            if j == 0:
+                i += 1
+    return count
+
+def kmp_similarity(job_words, resume_words):
+    text = ' '.join(resume_words)
+    hits = sum(kmp_search(text, word) for word in job_words)
+    return hits / len(job_words) if job_words else 0
+
+
+def edit_distance(seq1, seq2):
+    m, n = len(seq1), len(seq2)
+    dp = [[0]*(n+1) for _ in range(m+1)]
+    for i in range(m+1):
+        dp[i][0] = i
+    for j in range(n+1):
+        dp[0][j] = j
+    for i in range(1, m+1):
+        for j in range(1, n+1):
+            cost = 0 if seq1[i-1] == seq2[j-1] else 1
+            dp[i][j] = min(
+                dp[i-1][j] + 1,
+                dp[i][j-1] + 1,
+                dp[i-1][j-1] + cost
+            )
+    return 1 - dp[m][n] / max(m, n)
+
+
+def match_resumes(job_desc, resumes):
+    job_tokens = clean_text(job_desc)
+    results = {}
+    for name, text in resumes.items():
+        res_tokens = clean_text(text)
+        score1 = fuzzy_lcs(job_tokens, res_tokens)
+        score2 = kmp_similarity(job_tokens, res_tokens)
+        score3 = edit_distance(job_tokens, res_tokens)
+        final = (0.4*score1 + 0.3*score2 + 0.3*score3)
+        results[name] = round(final * 100, 2)
+    return dict(sorted(results.items(), key=lambda x: x[1], reverse=True))
+
+
+
+intro = widgets.HTML("""
+<h3>Automatic Resume Matcher </h3>
+<p>Enter a job description, choose how many resumes you want to paste, then paste each resume. 
+Click <b>Run Matcher</b> to see ranked results.</p>
+""")
+
+num_resumes_widget = widgets.BoundedIntText(
+    value=3, min=1, max=10, description='Resumes:'
+)
+generate_btn = widgets.Button(description='Create Resume Fields')
+run_btn = widgets.Button(description='Run Matcher', button_style='success')
+output = widgets.Output()
+fields_box = widgets.VBox([])
+res_widgets = []
+
+def create_resume_fields(_=None):
+    global res_widgets
+    res_widgets = []
+    n = int(num_resumes_widget.value)
+    boxes = []
+    sample_resumes = [
+        ("AVNI", """Python developer experienced in data analysis using pandas and NumPy. 
+        Built ML models with scikit-learn and optimized model performance. 
+        Worked with SQL databases and REST APIs."""),
+        
+        ("PRIYANKA", """Software engineer skilled in C++, Java, and backend systems. 
+        Limited experience in Python but strong debugging and algorithmic knowledge."""),
+        
+        ("RIDDHI", """Data scientist specialized in machine learning and predictive analytics. 
+        Experienced with Python, pandas, scikit-learn, and model deployment. 
+        Strong understanding of data cleaning and visualization.""")
+    ]
+    for i in range(n):
+        name_default, resume_default = sample_resumes[i] if i < len(sample_resumes) else (f"Candidate_{i+1}", "")
+        name_w = widgets.Text(value=name_default, description='Name:')
+        ta = widgets.Textarea(value=resume_default,
+                              layout=widgets.Layout(width='100%', height='120px'))
+        res_widgets.append((name_w, ta))
+        boxes.append(widgets.VBox([name_w, ta]))
+    fields_box.children = boxes
+
+
+num_resumes_widget.observe(create_resume_fields, names='value')
+
+def run_matcher(_):
+    with output:
+        clear_output()
+        job = job_desc.value.strip()
+        if not job:
+            print('Please enter a job description.')
+            return
+        resumes = {}
+        for name_w, ta in res_widgets:
+            name = name_w.value.strip() or 'Unnamed'
+            txt = ta.value.strip()
+            if txt:
+                resumes[name] = txt
+        if not resumes:
+            print('Please provide at least one resume text.')
+            return
+        print('🔍 Calculating similarity scores...')
+        result = match_resumes(job, resumes)
+        print('\n===== RESUME RANKINGS (in %) =====')
+        for name, score in result.items():
+            print(f"{name}: {score}%")
+        best = max(result, key=result.get)
+        print(f"\n🏆 Best match: {best} ({result[best]}%)")
+
+job_desc = widgets.Textarea(
+    value='''We are seeking a highly motivated Python Developer with strong experience in data analysis, machine learning, and software development. The ideal candidate should have hands-on experience with Python libraries such as pandas, NumPy, and scikit-learn. You will work closely with the data science team to build, train, and deploy machine learning models. Knowledge of SQL, APIs, and model optimization techniques will be an added advantage. Excellent problem-solving skills and the ability to write clean, efficient code are essential.''',
+    layout=widgets.Layout(width='100%', height='140px')
+)
+
+generate_btn.on_click(create_resume_fields)
+run_btn.on_click(run_matcher)
+
+controls = widgets.HBox([num_resumes_widget, generate_btn, run_btn])
+ui = widgets.VBox([intro, widgets.Label('Job Description:'), job_desc, controls, fields_box, output])
+
+
+create_resume_fields()
+
+display(ui)
